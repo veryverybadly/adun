@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Adun Overlay</title>
+<style>
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+body { user-select: none; -webkit-user-select: none; }
+#scene { position: fixed; inset: 0; overflow: hidden; perspective: 700px; }
+#adun-cube {
+  position: absolute; top: 0; left: 0; width: 96px; height: 96px;
+  z-index: 99999; cursor: grab; user-select: none; touch-action: none;
+  will-change: transform;
+}
+#adun-cube.dragging { cursor: grabbing; }
+#adun-inner {
+  position: relative; width: 96px; height: 96px;
+  transform-style: preserve-3d; will-change: transform;
+}
+#adun-cube .face {
+  position: absolute; inset: 0; width: 96px; height: 96px;
+  background-image: url("./adun.png"); background-size: cover;
+  background-position: center; background-repeat: no-repeat;
+  border: 2px solid #ff0000; box-sizing: border-box;
+  box-shadow: inset 0 0 18px rgba(0,0,0,.65);
+  image-rendering: pixelated; backface-visibility: hidden;
+}
+#adun-cube .f-front { transform: translateZ(48px); }
+#adun-cube .f-back { transform: rotateY(180deg) translateZ(48px); filter: brightness(.85); }
+#adun-cube .f-right { transform: rotateY(90deg) translateZ(48px); filter: brightness(.92); }
+#adun-cube .f-left { transform: rotateY(-90deg) translateZ(48px); filter: brightness(.92); }
+#adun-cube .f-top { transform: rotateX(90deg) translateZ(48px); filter: brightness(1.08); }
+#adun-cube .f-bottom { transform: rotateX(-90deg) translateZ(48px); filter: brightness(.75); }
+#adun-shadow {
+  position: absolute; left: 50%; bottom: -18px; width: 86px; height: 18px;
+  background: radial-gradient(ellipse at center, rgba(0,0,0,.65), transparent 72%);
+  transform: translateX(-50%); pointer-events: none; will-change: transform, opacity;
+}
+@keyframes adunFlash {
+  0% { filter: brightness(2) saturate(1.8); }
+  100% { filter: brightness(1) saturate(1); }
+}
+#adun-cube.kicked .face { animation: adunFlash .25s ease-out; }
+</style>
+</head>
+<body>
+<div id="scene">
+  <div id="adun-cube" title="">
+    <div class="cube-shadow" id="adun-shadow"></div>
+    <div class="cube-inner" id="adun-inner">
+      <div class="face f-front"></div>
+      <div class="face f-back"></div>
+      <div class="face f-right"></div>
+      <div class="face f-left"></div>
+      <div class="face f-top"></div>
+      <div class="face f-bottom"></div>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  const cube = document.getElementById('adun-cube')
+  const inner = document.getElementById('adun-inner')
+  const shadow = document.getElementById('adun-shadow')
+  if (!cube || !inner) return
+
+  const SIZE = 96
+  const FLOOR_OFFSET = 150
+  const WALL_LEFT = 0
+  const WALL_RIGHT = 0
+  const GRAVITY = 2400
+  const AIR_DRAG = 0.992
+  const GROUND_FRICTION = 0.86
+  const BOUNCE = 0.65
+  const MAX_SPEED = 2800
+
+  let x = 120, y = 120
+  let vx = 0, vy = 0
+  let grabOffsetX = SIZE / 2, grabOffsetY = SIZE / 2
+  let rotX = -18, rotY = 25, rotZ = 0
+  let vRotX = 0, vRotY = 45, vRotZ = 0
+  let dragging = false
+  let lastTime = performance.now()
+  let pointerHistory = []
+  let width = window.innerWidth
+  let height = window.innerHeight
+  let lastRectUpdate = 0
+
+  function getFloorY() { return Math.max(0, height - SIZE - FLOOR_OFFSET) }
+  function getLeftX() { return WALL_LEFT }
+  function getRightX() { return Math.max(0, width - SIZE - WALL_RIGHT) }
+  function clamp(v, min, max) { return Math.max(min, Math.min(max, v)) }
+
+  function kick(impactSpeed) {
+    if (impactSpeed < 180) return
+    cube.classList.remove('kicked')
+    void cube.offsetWidth
+    cube.classList.add('kicked')
+    clearTimeout(cube._kickTimer)
+    cube._kickTimer = setTimeout(() => cube.classList.remove('kicked'), 250)
+  }
+
+  function rememberPointer(px, py, time) {
+    pointerHistory.push({ x: px, y: py, t: time })
+    while (pointerHistory.length > 2 && time - pointerHistory[0].t > 100) pointerHistory.shift()
+  }
+
+  function getPointer(e) { return e.touches ? e.touches[0] : e }
+
+  function onDown(e) {
+    if (e.button !== undefined && e.button !== 0) return
+    dragging = true
+    cube.classList.add('dragging')
+    const p = getPointer(e)
+    const now = performance.now()
+    grabOffsetX = p.clientX - x
+    grabOffsetY = p.clientY - y
+    vx = 0
+    vy = 0
+    pointerHistory = [{ x: p.clientX, y: p.clientY, t: now }]
+    window.overlay.setDragging(true)
+    e.preventDefault()
+  }
+
+  function onMove(e) {
+    if (!dragging) return
+    const p = getPointer(e)
+    const now = performance.now()
+    const nx = p.clientX - grabOffsetX
+    const ny = p.clientY - grabOffsetY
+    const dx = nx - x
+    const dy = ny - y
+    vRotY = clamp(dx * 12, -720, 720)
+    vRotX = clamp(-dy * 12, -720, 720)
+    x = nx
+    y = ny
+    rememberPointer(p.clientX, p.clientY, now)
+    e.preventDefault()
+  }
+
+  function onUp() {
+    if (!dragging) return
+    dragging = false
+    cube.classList.remove('dragging')
+    window.overlay.setDragging(false)
+    const now = performance.now()
+    while (pointerHistory.length > 1 && now - pointerHistory[0].t > 100) pointerHistory.shift()
+    if (pointerHistory.length >= 2) {
+      const first = pointerHistory[0]
+      const last = pointerHistory[pointerHistory.length - 1]
+      const dt = (last.t - first.t) / 1000
+      if (dt > 0.004) {
+        vx = clamp((last.x - first.x) / dt, -MAX_SPEED, MAX_SPEED)
+        vy = clamp((last.y - first.y) / dt, -MAX_SPEED, MAX_SPEED)
+        vRotY = vx * 0.45
+        vRotX = -vy * 0.45
+        vRotZ = (vx - vy) * 0.15
+      }
+    } else {
+      vx = 0
+      vy = 0
+    }
+    pointerHistory = []
+  }
+
+  cube.addEventListener('mousedown', onDown)
+  cube.addEventListener('touchstart', onDown, { passive: false })
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('touchmove', onMove, { passive: false })
+  window.addEventListener('mouseup', onUp)
+  window.addEventListener('touchend', onUp)
+  window.addEventListener('touchcancel', onUp)
+
+  function reset() {
+    x = 120
+    y = 120
+    vx = 0
+    vy = 0
+    rotX = -18
+    rotY = 25
+    rotZ = 0
+    vRotX = 0
+    vRotY = 45
+    vRotZ = 0
+    dragging = false
+    cube.classList.remove('dragging')
+    window.overlay.setDragging(false)
+    pointerHistory = []
+  }
+
+  function updateRect(now) {
+    if (now - lastRectUpdate < 16) return
+    lastRectUpdate = now
+    window.overlay.updateRect({ x, y, width: SIZE, height: SIZE })
+  }
+
+  function step(now) {
+    const dt = Math.min(0.04, Math.max(0.001, (now - lastTime) / 1000))
+    lastTime = now
+    const minX = getLeftX()
+    const maxX = getRightX()
+    const maxY = getFloorY()
+
+    if (!dragging) {
+      vy += GRAVITY * dt
+      const drag = Math.pow(AIR_DRAG, dt * 60)
+      vx *= drag
+      vy *= drag
+      x += vx * dt
+      y += vy * dt
+
+      if (x < minX) {
+        x = minX
+        const impact = Math.abs(vx)
+        vx = -vx * BOUNCE
+        vRotY = -vRotY * 0.7 + vy * 0.25
+        vRotZ = -vy * 0.3
+        kick(impact)
+      } else if (x > maxX) {
+        x = maxX
+        const impact = Math.abs(vx)
+        vx = -vx * BOUNCE
+        vRotY = -vRotY * 0.7 - vy * 0.25
+        vRotZ = vy * 0.3
+        kick(impact)
+      }
+
+      if (y < 0) {
+        y = 0
+        const impact = Math.abs(vy)
+        vy = -vy * BOUNCE
+        vRotX = -vRotX * 0.7
+        kick(impact)
+      }
+
+      if (y >= maxY) {
+        y = maxY
+        const impact = Math.abs(vy)
+        if (impact > 95) {
+          vy = -vy * BOUNCE
+          vRotY = vx * 0.5
+          vRotZ += vx * 0.2
+          kick(impact)
+        } else {
+          vy = 0
+        }
+
+        const floorFriction = Math.pow(GROUND_FRICTION, dt * 60)
+        vx *= floorFriction
+        if (Math.abs(vx) < 4) vx = 0
+        vRotY = vx * 0.6
+        vRotX *= Math.pow(0.82, dt * 60)
+        vRotZ *= Math.pow(0.82, dt * 60)
+
+        if (Math.abs(vx) === 0 && vy === 0) {
+          vRotY += (35 - vRotY) * 3 * dt
+          rotX += (-18 - rotX) * 4 * dt
+          rotZ += (0 - rotZ) * 4 * dt
+        }
+      } else {
+        const rotDrag = Math.pow(0.99, dt * 60)
+        vRotX *= rotDrag
+        vRotY *= rotDrag
+        vRotZ *= rotDrag
+      }
+    }
+
+    rotX = (rotX + vRotX * dt) % 360
+    rotY = (rotY + vRotY * dt) % 360
+    rotZ = (rotZ + vRotZ * dt) % 360
+
+    cube.style.transform = `translate3d(${x}px, ${y}px, 0)`
+    inner.style.transform = `rotateX(${rotX}deg) rotateY(${rotY}deg) rotateZ(${rotZ}deg)`
+
+    if (shadow) {
+      const distFromFloor = Math.max(0, maxY - y)
+      const factor = clamp(1 - distFromFloor / 550, 0.15, 1)
+      shadow.style.transform = `translate3d(-50%, ${distFromFloor}px, 0) scale(${1 + (1 - factor) * 0.45})`
+      shadow.style.opacity = (factor * 0.75).toFixed(2)
+    }
+
+    updateRect(now)
+    requestAnimationFrame(step)
+  }
+
+  function resize() {
+    width = window.innerWidth
+    height = window.innerHeight
+    x = clamp(x, getLeftX(), getRightX())
+    y = clamp(y, 0, getFloorY())
+  }
+
+  window.overlay.onReset(reset)
+  window.overlay.onDisplayChanged(resize)
+  window.addEventListener('resize', resize)
+  reset()
+  requestAnimationFrame(step)
+})()
+</script>
+</body>
+</html>

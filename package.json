@@ -1,0 +1,41 @@
+{
+  "name": "adun-desktop-overlay",
+  "version": "1.0.0",
+  "description": "A floating 3D Adun cube for Windows",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "37.2.6",
+    "electron-builder": "26.0.12"
+  },
+  "build": {
+    "appId": "ru.b4dly.adunoverlay",
+    "productName": "Adun Overlay",
+    "asar": true,
+    "files": [
+      "main.js",
+      "preload.js",
+      "index.html",
+      "adun.png",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  },
+  "allowScripts": {
+    "electron@37.2.6": true,
+    "electron-winstaller@5.4.0": true
+  }
+}
