@@ -1,6 +1,4 @@
-(
-echo node_modules/
-echo dist/
-echo electron.zip
-echo *.log
-) > .gitignore
+node_modules/
+dist/
+electron.zip
+*.log
